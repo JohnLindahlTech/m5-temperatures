@@ -25,18 +25,18 @@ If the below defaults does not fit your need, you can override the definitons in
 This is strongly recommended to utilize if needing to use `Legacy mode` of the temperature protocol, as you will have to hardcode names of indicators.
 
 
-### m5/temperature/[0-3]
+### `m5/temperature/[0-3]`
 Subscription: The payload of the temperature supports 2 modes of operation.
 * Legacy mode: `signed number` - Just send the temperature as a signed floating point (or `-` for no value). Examples: `-3.5`, `0.0`, `1.0`, `-`
 * Dynamic mode: `signed number|name` - Pipe separated temperature as a signed floating point (or `-` for no value) and the name of the temperature to display. Examples: `-3.5|Kitchen`, `0.0|Bedroom`, `1.0|Entry`, `-|Backside`
 
-### m5/request/update
+### `m5/request/update`
 Publish: The M5 will send a request to update at certain times (i.e. when starting up and button B pressed), with the payload `true`. Your server should then publish updates on the `m5/temperature/[0-3]` topics.
 
-### m5/status/sleep
+### `m5/status/sleep`
 Subscription: When a message is received on this topic, the screen will go to sleep, updates will continue in the background, this is to save the display, but does not conserve battery.
 
-### m5/status/wake
+### `m5/status/wake`
 Subscription: When a message is received on this topic, the screen will wake, and present current values. (Recommendation, make sure that your server send updates on the `m5/temperature/[0-3]` topics at the same time).
 
 ## Roadmap
