@@ -7,6 +7,7 @@
 
 #include <WiFi.h>
 #include "time.h"
+#include "rht03.h"
 
 #include "credentials.h"
 
@@ -34,6 +35,19 @@
 #define REQUEST_UPDATE    "m5/request/update"
 #define SLEEP             "m5/status/sleep"
 #define WAKE              "m5/status/wake"
+
+#define PIR_MOVEMENT      "m5/motion"
+#define RHT_HUMIDITY      "m5/humidity"
+#define RHT_TEMPERATURE      "m5/temperature"
+
+// PIR Sensor
+#define ENABLE_PIR        false
+#define PIR_PIN           19
+#define PIR_TIMEOUT_SECONDS  5
+
+#define QR_CODE "WIFI:S:Not Yet Configured;T:WPA;P:passwords are overrated;;";
+
+#define TEMP_PIN 0
 
 #endif
 #endif
@@ -68,6 +82,27 @@ char temperature2[50] = "";
 char name3[50] = DEFAULT_NAME_3;
 char temperature3[50] = "";
 
+// PIR
+bool pir_movement = false;
+bool pir_reported = false;
+long pir_no_motion_timestamp = 0;
+long pir_motion_timestamp = 0;
+
+// WIFI QR
+const char* qrCode = QR_CODE;
+bool qrCodeVisible = false;
+bool lcdAwake = true;
+
+// Humidity and Temp
+hw_timer_t *rht_timer = NULL;
+RHT03 rht;
+bool rht_reported = false;
+bool rht_updated = false;
+float rht_humidity = 0.0;
+float rht_temperature = 0.0;
+
+char rht_tmp[50] = "";
+char rht_hmd[50] = "";
 
 
 // 320 x 240
@@ -77,6 +112,19 @@ const int height = 240; // 240
 const int padding = 5;
 const int lineHeight = 30;
 const int radius = 10;
+
+void wakeLcd(){
+  lcdAwake = true;
+  M5.Lcd.wakeup();
+}
+void sleepLcd(){
+  lcdAwake = false;
+  M5.Lcd.sleep();
+}
+
+void printDot(uint32_t color){
+  M5.Lcd.fillCircle(160, 120, 5, color);
+}
 
 void printBase(){
   printUpperLeft(name0, "-", GREEN);
@@ -143,25 +191,25 @@ uint32_t getWifiErrorColor(int type){
 void printWifiError(boolean active, int errorType){
   uint32_t color = getWifiErrorColor(errorType);
   if(active){
-    M5.Lcd.fillCircle(160, 120, 5, color);
+    printDot(color);
   } else {
-    M5.Lcd.fillCircle(160, 120, 5, BLACK);
+    printDot(BLACK);
   }
 }
 
 void printMQTTError(boolean active){
   if(active){
-    M5.Lcd.fillCircle(160, 120, 5, ORANGE);
+    printDot(ORANGE);
   } else {
-    M5.Lcd.fillCircle(160, 120, 5, BLACK);
+    printDot(BLACK);
   }
 }
 
 void printMQTTReceived(boolean active){
     if(active){
-    M5.Lcd.fillCircle(160, 120, 5, GREEN);
+    printDot(GREEN);
   } else {
-    M5.Lcd.fillCircle(160, 120, 5, BLACK);
+    printDot(BLACK);
   }
 }
 
@@ -259,34 +307,41 @@ void receivedCallback(char* topic, byte* payload, unsigned int length) {
     if(foundDelimiter >= 0){
       updateVar(name0, name);
     }
-    print0();
   } else if(strcmp(topic,TEMPERATURE_1) == 0){
     updateVar(temperature1, temp);
     if(foundDelimiter >= 0){
       updateVar(name1, name);
     }
-    print1();
   } else if(strcmp(topic, TEMPERATURE_2) == 0){
     updateVar(temperature2, temp);
     if(foundDelimiter >= 0){
       updateVar(name2, name);
     }
-    print2();
+
   } else if(strcmp(topic,TEMPERATURE_3) == 0){
     updateVar(temperature3, temp);
     if(foundDelimiter >= 0){
       updateVar(name3, name);
     }
-    print3();
+
   } else if(strcmp(topic, WAKE) == 0){
-    M5.Lcd.wakeup();
+    wakeLcd();
   } else if(strcmp(topic, SLEEP) == 0){
-    M5.Lcd.sleep();
+    sleepLcd();
   }
-  
+  printAll();
   printMQTTReceived(true);
   lastReceivedMessage = millis();
   lastReceivedTimestamp = millis();
+}
+
+void printAll(){
+  if(!qrCodeVisible){
+    print0();
+    print1();
+    print2();
+    print3();
+  }
 }
 
 uint32_t getTemperatureColor(char * temp){
@@ -327,10 +382,10 @@ boolean mqttConnect(boolean silent) {
         printMQTTError(false);
       }
       /* subscribe topic */
-      client.subscribe(WAKE);
-      client.subscribe(SLEEP);
+      // client.subscribe(WAKE); // TODO
+      // client.subscribe(SLEEP); // TODO
       client.subscribe(TEMPERATURE_2);
-      client.subscribe(TEMPERATURE_3);
+      // client.subscribe(TEMPERATURE_3);
       client.subscribe(TEMPERATURE_0);
       client.subscribe(TEMPERATURE_1);
       client.publish(REQUEST_UPDATE, "true", false);
@@ -349,28 +404,152 @@ boolean mqttConnect(boolean silent) {
   return client.connected();
 }
 
+void detectedMovement(){
+  wakeLcd();
+  pir_movement = true;
+  pir_reported = false;
+  pir_motion_timestamp = millis();
+}
+
+void detectedNoMovement(){
+  pir_movement = false;
+  pir_reported = false;
+  pir_no_motion_timestamp = millis();
+}
+
+void IRAM_ATTR detectsMovement() {
+  int pirState = digitalRead(PIR_PIN);
+  if(pirState == LOW){
+    detectedNoMovement();
+  } else if (pirState == HIGH) {
+    detectedMovement();
+  }
+}
+
+bool timerTrigger = true;
+void IRAM_ATTR onRHTTimer(){
+  timerTrigger = true;
+}
+
+
+void c0(void *pvparameters){
+  Serial.begin(9600);
+  pinMode(PIR_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIR_PIN), detectsMovement, CHANGE);
+  rht_timer = timerBegin(0, 80, true);
+  timerAttachInterrupt(rht_timer, &onRHTTimer, true);
+  timerAlarmWrite(rht_timer, 15 * 1000000, true);
+  timerAlarmEnable(rht_timer); //Just Enable
+  
+  for(;;){
+    delay(10);
+    if(!pir_movement){
+      long now = millis();
+
+      if(now > pir_no_motion_timestamp + (PIR_TIMEOUT_SECONDS * 1000)){
+        sleepLcd();
+      }
+    }
+    if(timerTrigger){
+      timerTrigger = false;
+      int updateRet = rht.update();
+      if (updateRet == 1){
+        rht_updated = true;
+        rht_reported = false;
+        rht_humidity = rht.humidity();
+        rht_temperature = rht.tempC();
+        dtostrf(rht_temperature, 6, 1, rht_tmp);
+        dtostrf(rht_humidity, 6, 1, rht_hmd);
+        updateVar(temperature3, rht_tmp);
+      } else {
+        Serial.println("Error: " + String(updateRet));
+      }
+    }
+  }
+}
+
+
+
 void setup(){
+  Serial.begin(9600);
   M5.begin(true, false, true, false);
+  rht.begin(RHT3_PIN);
   M5.Axp.SetLed(0);
   M5.Lcd.setFreeFont(&FreeSans12pt7b);
   M5.Lcd.setTextDatum(MC_DATUM);
   M5.Lcd.setTextSize(1);
+
+  if(ENABLE_PIR){
+    xTaskCreatePinnedToCore(c0, "Core0 Loop", 2000, NULL, 0, NULL, 0);
+  }
+  
+
   printBase();
   setupMQTT();
   ensureWifi(ssid, password, true);
 }
 
+void printQr(){
+  qrCodeVisible = true;
+  M5.Lcd.clear();
+  M5.Lcd.qrcode(qrCode, 40, 0, 240, 4);
+
+}
+
+void hideQr(){
+  qrCodeVisible = false;
+  M5.Lcd.clear();
+  printAll();
+}
+
+void buttonAPress(){
+  wakeLcd();
+  if(qrCodeVisible){
+    hideQr();
+  } else {
+    printQr();
+  }
+}
+
+void buttonBPress(){
+  wakeLcd();
+  client.publish(REQUEST_UPDATE, "true", false);
+  timerTrigger = true;
+}
+
+void buttonCPress(){
+  if(lcdAwake){
+    sleepLcd();
+  }else {
+    wakeLcd();
+  }
+}
+
 void loop(){
-  delay(10);
+  delay(1);
+  
   M5.update();
   if (M5.BtnA.wasPressed()) {
-    M5.Lcd.wakeup();
+    buttonAPress(); 
   }
+
   if (M5.BtnC.wasPressed()) {
-    M5.Lcd.sleep();
+    buttonCPress();
   }
+
   if(M5.BtnB.wasPressed()){
-    client.publish(REQUEST_UPDATE, "true", false);
+    buttonBPress();
+  }
+
+  if(!pir_reported){
+    pir_reported = true;
+    client.publish(PIR_MOVEMENT, pir_movement ? "motion" : "no motion", false);
+  }
+  if(!rht_reported && rht_updated){
+    rht_reported = true;
+    print3();
+    client.publish(RHT_HUMIDITY, rht_hmd, false);
+    client.publish(RHT_TEMPERATURE, rht_tmp, false);
   }
   ensureWifi(ssid, password, false);
   long now = millis();
@@ -384,15 +563,13 @@ void loop(){
         mqttLastReconnectAttempt = 0;
       }
     }
-    
-    
-    
+
   } else {
     client.loop();
   }
   if(lastReceivedTimestamp > 0 && now - lastReceivedTimestamp > 1000 * 60 * 60){ // 1hour old data
      printBase();
-     M5.Lcd.sleep();
+     sleepLcd();
      lastReceivedTimestamp = 0;
   }
   if(lastReceivedMessage > 0 && now - lastReceivedMessage > 500){

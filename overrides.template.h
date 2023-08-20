@@ -22,3 +22,16 @@
 #define REQUEST_UPDATE    "m5/request/update"
 #define SLEEP             "m5/status/sleep"
 #define WAKE              "m5/status/wake"
+
+#define PIR_MOVEMENT      "m5/motion"
+#define RHT_HUMIDITY      "m5/humidity"
+#define RHT_TEMPERATURE   "m5/temperature"
+
+
+#define ENABLE_PIR        false
+#define PIR_PIN           34
+#define PIR_TIMEOUT_SECONDS  5
+
+#define QR_CODE "WIFI:S:Not Yet Configured;T:WPA;P:passwords are overrated;;";
+
+#define RHT3_PIN 0

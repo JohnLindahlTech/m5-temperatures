@@ -39,8 +39,16 @@ Subscription: When a message is received on this topic, the screen will go to sl
 ### `m5/status/wake`
 Subscription: When a message is received on this topic, the screen will wake, and present current values. (Recommendation, make sure that your server send updates on the `m5/temperature/[0-3]` topics at the same time).
 
+### `m5/pir/motion`
+Publish: Will publish updates to when the PIR sensors identifies motion or not. `motion` / `no motion`
+
+
+## RHT03 Temp/Humidity sensor
+See [https://github.com/sparkfun/SparkFun_RHT03_Arduino_Library](https://github.com/sparkfun/SparkFun_RHT03_Arduino_Library)
+
+Install Library: `SparkFun RHT03 Arduino Library`
+
 ## Roadmap
-* Offload network traffic to alternative Core.
 * Dynamic count of temperatures.
   * Scale up UI if less than 4 temperatures on screen.
   * Pagination/Carousel if many temperatures.
