@@ -49,10 +49,11 @@ See [https://github.com/sparkfun/SparkFun_RHT03_Arduino_Library](https://github.
 Install Library: `SparkFun RHT03 Arduino Library`
 
 ## Roadmap
-* Dynamic count of temperatures.
-  * Scale up UI if less than 4 temperatures on screen.
-  * Pagination/Carousel if many temperatures.
-  * Touch Screen Main Menu to Scale/"Zoom" UI. (e.g. Show 1, 4, 16 temperatures on screen).
+* Save settings to Preferences.h. See [https://randomnerdtutorials.com/esp32-save-data-permanently-preferences/](https://randomnerdtutorials.com/esp32-save-data-permanently-preferences/)
+  * Enable/disable PIR + PIN + Motion Timeout
+  * Enable/disable RHT3 + PIN + Position + Temp calibration
+  * Fed by MQTT
+  * Wifi HotSpot to configure all them settings in a form.
 
 
 ## Troubleshoot
