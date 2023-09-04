@@ -45,9 +45,13 @@
 #define PIR_PIN           19
 #define PIR_TIMEOUT_SECONDS  5
 
-#define QR_CODE "WIFI:S:Not Yet Configured;T:WPA;P:passwords are overrated;;";
+#define QR_CODE "WIFI:S:Not Yet Configured;T:WPA;P:passwords are overrated;;"
 
 #define TEMP_PIN 0
+#define ENABLE_RHT3 false
+#define RHT3_PIN 0
+#define RHT3_POSITION 3
+#define RHT3_CELSIUS_CALIBRATION 0
 
 #endif
 #endif
@@ -88,6 +92,8 @@ bool pir_reported = false;
 long pir_no_motion_timestamp = 0;
 long pir_motion_timestamp = 0;
 
+long button_last_pressed_timestamp = 0;
+
 // WIFI QR
 const char* qrCode = QR_CODE;
 bool qrCodeVisible = false;
@@ -114,10 +120,12 @@ const int lineHeight = 30;
 const int radius = 10;
 
 void wakeLcd(){
+  Serial.println("Wake LCD");
   lcdAwake = true;
   M5.Lcd.wakeup();
 }
 void sleepLcd(){
+  Serial.println("Sleep LCD");
   lcdAwake = false;
   M5.Lcd.sleep();
 }
@@ -286,6 +294,7 @@ void updateVar(char var[], char buf[]){
 }
 
 void receivedCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.println("Got MQTT Message");
   int foundDelimiter = -1;
   char buf[50] = "\0";
   char name[50] = "\0";
@@ -382,12 +391,27 @@ boolean mqttConnect(boolean silent) {
         printMQTTError(false);
       }
       /* subscribe topic */
-      // client.subscribe(WAKE); // TODO
-      // client.subscribe(SLEEP); // TODO
-      client.subscribe(TEMPERATURE_2);
-      // client.subscribe(TEMPERATURE_3);
-      client.subscribe(TEMPERATURE_0);
-      client.subscribe(TEMPERATURE_1);
+      if(!ENABLE_PIR){
+        Serial.println("PIR disabled, subscribing to wake/sleep events");
+        client.subscribe(WAKE);
+        client.subscribe(SLEEP);
+      }
+      if(!ENABLE_RHT3 || RHT3_POSITION != 0){
+        Serial.println("Enabling Temp 0 Subscription");
+        client.subscribe(TEMPERATURE_0);
+      }
+      if(!ENABLE_RHT3 || RHT3_POSITION != 1){
+        Serial.println("Enabling Temp 1 Subscription");
+        client.subscribe(TEMPERATURE_1);
+      }
+      if(!ENABLE_RHT3 || RHT3_POSITION != 2){
+        Serial.println("Enabling Temp 2 Subscription");
+        client.subscribe(TEMPERATURE_2);
+      }
+      if(!ENABLE_RHT3 || RHT3_POSITION != 3){
+        Serial.println("Enabling Temp 3 Subscription");
+        client.subscribe(TEMPERATURE_3);
+      }
       client.publish(REQUEST_UPDATE, "true", false);
     } else {
       if(!silent){
@@ -405,6 +429,7 @@ boolean mqttConnect(boolean silent) {
 }
 
 void detectedMovement(){
+  Serial.println("Got Movement");
   wakeLcd();
   pir_movement = true;
   pir_reported = false;
@@ -412,12 +437,14 @@ void detectedMovement(){
 }
 
 void detectedNoMovement(){
+  Serial.println("Got NO Movement");
   pir_movement = false;
   pir_reported = false;
   pir_no_motion_timestamp = millis();
 }
 
 void IRAM_ATTR detectsMovement() {
+  Serial.println("Interrupt detectsMovement");
   int pirState = digitalRead(PIR_PIN);
   if(pirState == LOW){
     detectedNoMovement();
@@ -428,36 +455,50 @@ void IRAM_ATTR detectsMovement() {
 
 bool timerTrigger = true;
 void IRAM_ATTR onRHTTimer(){
+  Serial.println("Interrupt onRHTTimer");
   timerTrigger = true;
+}
+
+bool hasTimedOut(long before, long now, long timeoutSeconds){
+  return now > before + (timeoutSeconds * 1000);
 }
 
 
 void c0(void *pvparameters){
   Serial.begin(9600);
-  pinMode(PIR_PIN, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIR_PIN), detectsMovement, CHANGE);
-  rht_timer = timerBegin(0, 80, true);
-  timerAttachInterrupt(rht_timer, &onRHTTimer, true);
-  timerAlarmWrite(rht_timer, 15 * 1000000, true);
-  timerAlarmEnable(rht_timer); //Just Enable
+  Serial.println("Starting c0");
+  if(ENABLE_PIR){
+    pinMode(PIR_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PIR_PIN), detectsMovement, CHANGE);
+  }
+
+  if(ENABLE_RHT3){
+    rht.begin(RHT3_PIN);
+    rht_timer = timerBegin(0, 80, true);
+    timerAttachInterrupt(rht_timer, &onRHTTimer, true);
+    timerAlarmWrite(rht_timer, 15 * 1000000, true);
+    timerAlarmEnable(rht_timer); //Just Enable
+  }
   
   for(;;){
-    delay(10);
-    if(!pir_movement){
+    delay(1);
+    if(ENABLE_PIR && !pir_movement && lcdAwake){
       long now = millis();
 
-      if(now > pir_no_motion_timestamp + (PIR_TIMEOUT_SECONDS * 1000)){
+      if(hasTimedOut(pir_no_motion_timestamp, now, PIR_TIMEOUT_SECONDS) && hasTimedOut(button_last_pressed_timestamp, now, PIR_TIMEOUT_SECONDS)){
+        Serial.println("Sleeping LCD due to no movement or presses in time");
         sleepLcd();
       }
     }
-    if(timerTrigger){
+    if(ENABLE_RHT3 && timerTrigger){
+      Serial.println("Timer has Triggered, acting on it.");
       timerTrigger = false;
       int updateRet = rht.update();
       if (updateRet == 1){
         rht_updated = true;
         rht_reported = false;
         rht_humidity = rht.humidity();
-        rht_temperature = rht.tempC();
+        rht_temperature = rht.tempC() + RHT3_CELSIUS_CALIBRATION;
         dtostrf(rht_temperature, 6, 1, rht_tmp);
         dtostrf(rht_humidity, 6, 1, rht_hmd);
         updateVar(temperature3, rht_tmp);
@@ -473,16 +514,15 @@ void c0(void *pvparameters){
 void setup(){
   Serial.begin(9600);
   M5.begin(true, false, true, false);
-  rht.begin(RHT3_PIN);
+  Serial.println("Primary setup starting");
   M5.Axp.SetLed(0);
   M5.Lcd.setFreeFont(&FreeSans12pt7b);
   M5.Lcd.setTextDatum(MC_DATUM);
   M5.Lcd.setTextSize(1);
 
-  if(ENABLE_PIR){
+  if(ENABLE_PIR || ENABLE_RHT3){
     xTaskCreatePinnedToCore(c0, "Core0 Loop", 2000, NULL, 0, NULL, 0);
   }
-  
 
   printBase();
   setupMQTT();
@@ -503,6 +543,7 @@ void hideQr(){
 }
 
 void buttonAPress(){
+  button_last_pressed_timestamp = millis();
   wakeLcd();
   if(qrCodeVisible){
     hideQr();
@@ -512,12 +553,14 @@ void buttonAPress(){
 }
 
 void buttonBPress(){
+  button_last_pressed_timestamp = millis();
   wakeLcd();
   client.publish(REQUEST_UPDATE, "true", false);
   timerTrigger = true;
 }
 
 void buttonCPress(){
+  button_last_pressed_timestamp = millis();
   if(lcdAwake){
     sleepLcd();
   }else {
@@ -542,12 +585,16 @@ void loop(){
   }
 
   if(!pir_reported){
+    Serial.println("Need to report PIR");
     pir_reported = true;
     client.publish(PIR_MOVEMENT, pir_movement ? "motion" : "no motion", false);
   }
   if(!rht_reported && rht_updated){
+    Serial.println("Need to report Temperature");
     rht_reported = true;
-    print3();
+    if(!qrCodeVisible){
+      print3();
+    }
     client.publish(RHT_HUMIDITY, rht_hmd, false);
     client.publish(RHT_TEMPERATURE, rht_tmp, false);
   }
