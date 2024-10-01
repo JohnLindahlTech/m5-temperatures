@@ -1,4 +1,8 @@
 # m5-temperatures
+> ## ARCHIVED
+> This repo has been archived in favour of [temperature-display](https://github.com/JohnLindahlTech/tempature-display)
+> 
+ 
  M5Stack Core2 Temperature Display
 
 ## Hardware
